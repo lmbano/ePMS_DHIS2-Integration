@@ -1,0 +1,170 @@
+Option Compare Database
+Option Explicit
+Public Sub ExportMOHCWXML()
+On Error GoTo Err_ExportMOHCWXML
+
+Dim DestinationFileName As String
+Dim DestinationPath As String
+Dim DestinationPathAndFileName As String
+Dim DestinationPathAndFileNameZip As String
+Dim BackEndPathAndFileName As String
+Dim BackEndPath As String
+    
+    DestinationFileName = "Export.xml"
+    
+    Select Case con_back_end
+        Case "MySQL"
+            If Dir("C:\EPMS", vbDirectory) = "" Then
+                MkDir ("C:\EPMS")
+            End If
+            If Dir("C:\EPMS\ExportDHIS", vbDirectory) = "" Then
+                MkDir ("C:\EPMS\ExportDHIS")
+            End If
+            DestinationPath = "C:\EPMS\ExportDHIS\"
+        Case Else
+            BackEndPathAndFileName = Get_pathname(CurrentDb.TableDefs("SecurityUsers").Connect, "=", True)
+            BackEndPath = Get_pathname(BackEndPathAndFileName, "\", False)
+            
+            If Dir(BackEndPath & "ExportDHIS", vbDirectory) = "" Then
+                MkDir (BackEndPath & "ExportDHIS")
+            End If
+            
+            DestinationPath = BackEndPath & "ExportDHIS\"
+    End Select
+        
+    DestinationPathAndFileName = DestinationPath & DestinationFileName
+    DestinationPathAndFileNameZip = DestinationPath & "MOHCW_MonthlyCS_" & Format(g_todate, "mmmyy") & "_" & Return_FacilityCode() & ".zip"
+
+    If Dir(DestinationPathAndFileNameZip) <> "" Then
+        Kill DestinationPathAndFileNameZip
+    End If
+
+
+    '*******************
+    Dim fs
+    Dim a
+
+    Set fs = CreateObject("Scripting.FileSystemObject")
+    Set a = fs.CreateTextFile(DestinationPathAndFileName, True)
+    a.Close
+    
+    
+    Open DestinationPathAndFileName For Output As #1
+    
+    
+    
+    '********
+    Dim TheXML As String
+    Dim categoryOptionCombo As Long
+    Dim DataElementID As Long
+    Dim DataValuesXML As String
+    
+    ' Call FillNACPTableNew
+    
+    DoCmd.Hourglass True
+    
+    ' opening tags
+    
+   
+    
+    Dim Con As Object
+    Dim rs As Object
+    Dim StSQL As String
+    Set Con = Application.CurrentProject.Connection
+    
+    ' list of data values
+   
+    StSQL = "SELECT tblRepMOHCW.*, tblRepSetupDataitems.DHIS_DataElementID, tblRepSetupAgeGroups.DHIS_CategoryID " & _
+                " FROM (tblRepMOHCW INNER JOIN tblRepSetupDataitems ON (tblRepMOHCW.MOHCWSection = tblRepSetupDataitems.MOHCWSection) AND (tblRepMOHCW.MOHCWItem = tblRepSetupDataitems.MOHCWItem)) INNER JOIN tblRepSetupAgeGroups ON (tblRepMOHCW.Sex = tblRepSetupAgeGroups.Sex) AND (tblRepMOHCW.MinAgeMonths = tblRepSetupAgeGroups.MinAge) AND (tblRepMOHCW.MaxAgeMonths = tblRepSetupAgeGroups.MaxAge) " & _
+                " WHERE (((tblRepSetupDataitems.DHIS_DataElementID) Is Not Null) And ((tblRepSetupAgeGroups.DHIS_CategoryID) Is Not Null)) " & _
+                " ORDER BY tblRepMOHCW.MOHCWSection, tblRepMOHCW.MOHCWitem, tblRepMOHCW.sex, tblRepMOHCW.Minagemonths, tblRepMOHCW.maxagemonths "
+
+                
+    Set rs = CreateObject("ADODB.Recordset")
+    rs.Open StSQL, Con, 1   ' 1 = adOpenKeyset
+      
+      ' SAMPLE: <dataValue dataElement="dataElement" categoryOptionCombo="categoryOption" period="YYYYMM" orgUnit="orgUnit" value=""/>
+      
+    Do Until rs.EOF
+        DataValuesXML = DataValuesXML & "<dataValue "
+        DataValuesXML = DataValuesXML & " dataElement=""" & rs!DHIS_DataElementID & """ "
+        DataValuesXML = DataValuesXML & " categoryOptionCombo=""" & rs!DHIS_CategoryID & """ "
+        DataValuesXML = DataValuesXML & " period=""" & Format(g_todate, "YYYYmm") & """ "
+        DataValuesXML = DataValuesXML & " orgUnit=""" & Return_FacilityCode() & """ "
+        DataValuesXML = DataValuesXML & " value=""" & rs!TheValue & """ "
+        DataValuesXML = DataValuesXML & "></dataValue>"
+    rs.MoveNext
+    Loop
+
+    rs.Close
+    Set rs = Nothing
+    Set Con = Nothing
+    
+    
+    TheXML = "<?xml version='1.0' encoding='utf-8' ?> " & _
+            "<dataValueSet xmlns='http://dhis2.org/schema/dxf/2.0' orgUnitIdScheme='code'> " & _
+            DataValuesXML & _
+            " </dataValueSet> "
+    
+    Print #1, TheXML
+
+    DoCmd.Hourglass False
+  
+    
+    '*********
+    Close #1
+
+    Call Zip_File(DestinationPathAndFileName, DestinationPathAndFileNameZip)
+    DoEvents
+    MsgBox "Report exported to " & DestinationPathAndFileNameZip, , MessageTitle
+    Kill DestinationPathAndFileName
+
+Exit_ExportMOHCWXML:
+    Exit Sub
+
+Err_ExportMOHCWXML:
+    MsgBox Err.Description
+    Resume Exit_ExportMOHCWXML
+Resume Next
+End Sub
+
+Sub Zip_File(RawFilePathAndName, ZipFilePathAndName)
+' Found this at http://www.tek-tips.com/viewthread.cfm?qid=1130420&page=1 and modified
+
+    Dim oApp As Object
+    Dim FName, FileNameZip
+ 
+
+    FileNameZip = ZipFilePathAndName
+    FName = RawFilePathAndName
+    
+    'Create empty Zip File
+    NewZip (FileNameZip)
+ 
+    Set oApp = CreateObject("Shell.Application")
+ 
+    oApp.NameSpace(FileNameZip).CopyHere FName
+      
+    ' MsgBox "You find the zipfile here: " & FileNameZip
+    Set oApp = Nothing
+End Sub
+
+Sub NewZip(sPath)
+'Create empty Zip File
+    Dim oFSO, arrHex, sBin, i, Zip
+    Set oFSO = CreateObject("Scripting.FileSystemObject")
+    arrHex = Array(80, 75, 5, 6, 0, 0, 0, _
+                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    For i = 0 To UBound(arrHex)
+        sBin = sBin & Chr(arrHex(i))
+    Next
+    With oFSO.CreateTextFile(sPath, True)
+        .Write sBin
+        .Close
+    End With
+End Sub
+
+
+
+
+
